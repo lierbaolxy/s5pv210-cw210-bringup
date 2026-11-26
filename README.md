@@ -25,6 +25,18 @@
 | NAND 启动 | **ON** | OFF | OFF | OFF |
 | USB 下载 | ON | OFF | OFF | ON |
 
+### USB 下载模式需要先装对驱动 ⚠️
+
+在 **USB 下载档**（1=ON、4=ON）下，S5PV210 的 iROM 会枚举出一个非标准 USB 设备，Windows 默认驱动会让 `dnw` / `libusb` 类工具**无法打开设备**（表现为找不到设备、通信失败、反复插拔无效）。
+
+解决办法：用 **Zadig** 把该设备的驱动替换为 **WinUSB**。
+
+- 工具：`tools/windows/zadig-2.9.exe`（GPLv3，来自 <https://zadig.akeo.ie/>）
+- 步骤：运行 Zadig → `Options → List All Devices` → 选中目标设备 → 右侧选 **WinUSB** → `Install Driver`
+- 详细说明见 [tools/windows/README.md](tools/windows/README.md)
+
+> 正常 NAND 启动（1=ON，其余 OFF）**不需要** Zadig，也不需要连 USB。只有 bootloader 损坏需要重新刷机、或要在 USB 下载档下临时获得 u-boot 命令行时才用到。
+
 ---
 
 ## 二、当前板子状态
@@ -87,7 +99,10 @@ s5pv210-cw210-bringup/
     ├── resume_flash.py                分段烧写 rootfs
     ├── board_net.py                   启用板子 eth0
     ├── board_check.py                 查看板子网络与进程
-    └── rootfs_yaffs2_fix.py           Android rootfs 布局转换（可复现 117MB 镜像）
+    ├── rootfs_yaffs2_fix.py           Android rootfs 布局转换（可复现 117MB 镜像）
+    └── windows/
+        ├── README.md                  USB 下载模式驱动安装说明
+        └── zadig-2.9.exe              把 USB 驱动替换为 WinUSB（USB 下载模式必需）
 ```
 
 ---

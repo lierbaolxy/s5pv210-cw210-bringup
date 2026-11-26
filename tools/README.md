@@ -23,6 +23,11 @@ pip install pyserial
 | `board_net.py` | 通过串口启用板子 `eth0`（`192.168.1.6`） |
 | `board_check.py` | 查看板子 `ifconfig` / `ps` / 可用服务 |
 | `rootfs_yaffs2_fix.py` | Android rootfs 布局转换：把 `name` 前后各 2 字节填充去掉，使其符合标准 yaffs2 |
+| `windows/zadig-2.9.exe` | **USB 下载模式必需**：把 S5PV210 iROM 下载设备的驱动替换为 WinUSB，否则 `dnw` 无法识别设备 |
+
+### windows/ 子目录
+
+USB 下载模式（拨码 1=ON、4=ON）下，iROM 枚举的非标准 USB 设备需要先用 Zadig 替换成 WinUSB 驱动，`dnw` 才能正常打开设备。详细步骤见 [windows/README.md](windows/README.md)。
 
 ---
 
