@@ -15,8 +15,13 @@
 | NAND | Samsung K9K8G08U0B，1GB，2KB 页 + 64B OOB，128KB 块，4-bit ECC |
 | LCD | 800×480 |
 | 板卡标识 | 达内 CW210 / ME210-BOX（底板）；u-boot 横幅 `##### JFJKJ BIOS for JFJ210 #####` |
-| 调试串口 | UART0（`ttySAC0`，`0xE2900000`），115200-8-N-1 |
+| 调试串口 | UART0（`ttySAC0`，`0xE2900000`），经 SP3232EEN 转 RS232 接到 **COM1（DB9）**，115200-8-N-1 |
 | 网络 | DM9000（16 位模式）；PC `192.168.1.13`，板子 `192.168.1.6`（MAC `10:23:45:67:89:ab`） |
+
+> 📌 **接线速查**（实测可用）：
+> - 串口：板 **COM1** DB9 的 **2 / 3 / 5** ↔ PC **USB 转 DB9** 的 **2 / 3 / 5**（直连，RS232 电平）
+> - 拨码：**SW3 = ON ON OFF OFF**，**SW4 = OFF OFF OFF OFF**
+> - 完整说明（含原理图依据、其他串口、故障判读）见 [docs/04_接线与拨码配置.md](docs/04_接线与拨码配置.md)
 
 **拨码开关**
 
@@ -70,7 +75,8 @@ s5pv210-cw210-bringup/
 ├── docs/                              排障与实现文档
 │   ├── 01_CW210_前期调试全记录_上篇.md
 │   ├── 02_CW210_NAND自启动_Linux修复完整记录.md
-│   └── 03_CW210_Android尝试与Linux恢复_完整记录.md
+│   ├── 03_CW210_Android尝试与Linux恢复_完整记录.md
+│   └── 04_接线与拨码配置.md             串口/网口/USB 连线与 SW3/SW4 拨码（实测可用）
 ├── bin/                               当前板上运行的二进制镜像
 │   ├── README.md                      每个镜像的烧录位置与命令
 │   ├── bootloader/
@@ -224,6 +230,7 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 | [01_CW210_前期调试全记录_上篇.md](docs/01_CW210_前期调试全记录_上篇.md) | 最早期的串口、DNW、BL1/BL2、内存与启动失败的排查 |
 | [02_CW210_NAND自启动_Linux修复完整记录.md](docs/02_CW210_NAND自启动_Linux修复完整记录.md) | 从 USB 下载态到 NAND 自启动 Linux 的完整修复过程 |
 | [03_CW210_Android尝试与Linux恢复_完整记录.md](docs/03_CW210_Android尝试与Linux恢复_完整记录.md) | Android 2.3 的尝试全过程、根因分析、以及 Linux 系统的恢复方法 |
+| [04_接线与拨码配置.md](docs/04_接线与拨码配置.md) | **串口/网口/USB 连线、SW3/SW4 拨码、启动方式、接线速查表与日志判读** |
 
 ---
 
