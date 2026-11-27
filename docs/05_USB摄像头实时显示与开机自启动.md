@@ -372,6 +372,11 @@ md5 `36757c531463d8d9d40ef05fba24cffe`），与本次改动前从板上 dump 出
 | 提交 | 时间 | 说明 |
 |---|---|---|
 | `2d40538` | 2026-11-27 | `feat: USB 摄像头实时显示到 LCD 并开机自启` |
+| `1d4ca02` | 2026-11-27 | `docs: 补充 USB 摄像头功能的提交记录` |
+| `28ae445` | 2026-11-27 | `docs: 记录屏幕自动熄屏问题与 consoleblank=0 修复` |
+
+> 熄屏修复只改了 u-boot 环境变量（新增 `consoleblank=0`），**没有新增镜像或代码文件**，
+> 因此没有对应的 bin 产物；回滚只需从 `bootargs` 中删掉该参数再 `saveenv`。
 
 - 分支：`main`
 - 远端：`git@github.com:lierbaolxy/s5pv210-cw210-bringup.git`
