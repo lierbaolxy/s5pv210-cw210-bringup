@@ -236,6 +236,7 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 | [02_CW210_NAND自启动_Linux修复完整记录.md](docs/02_CW210_NAND自启动_Linux修复完整记录.md) | 从 USB 下载态到 NAND 自启动 Linux 的完整修复过程 |
 | [03_CW210_Android尝试与Linux恢复_完整记录.md](docs/03_CW210_Android尝试与Linux恢复_完整记录.md) | Android 2.3 的尝试全过程、根因分析、以及 Linux 系统的恢复方法 |
 | [04_接线与拨码配置.md](docs/04_接线与拨码配置.md) | **串口/网口/USB 连线、SW3/SW4 拨码、启动方式、接线速查表与日志判读** |
+| [05_USB摄像头实时显示与开机自启动.md](docs/05_USB摄像头实时显示与开机自启动.md) | **给内核补 UVC 驱动、cramfs 加自启动、实测 28~29fps 的完整过程与坑** |
 | [hardware/](docs/hardware/README.md) | **硬件原理图与手册**：底板图、核心板图（TARENA / LHGZ 两版）、S5PV210 SoC 用户手册、iROM 应用笔记、NAND 数据手册 |
 
 ---
@@ -248,6 +249,10 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 | `bin/bootloader/x210_usb.bin` | 配套资源 `image/android_system/x210_usb.bin`（BL1，USB 下载用） |
 | `bin/kernel/zImage` | 配套资源 `image/normal_system/zImage`（Linux 2.6.35.7-Concenwit #5） |
 | `bin/rootfs/rootfs.cramfs` | 配套资源 `image/normal_system/rootfs.cramfs` |
+| `bin/rootfs/rootfs_uvc.cramfs` | **当前板内运行**：在原 cramfs 基础上加入 `uvcvideo.ko`、`uvc2fb` 与 rcS 自启动（3,940,352 字节） |
+| `bin/rootfs/rootfs_splash.cramfs` | 加摄像头功能之前的镜像（3,555,328 字节），回滚用 |
+| `bin/uvc/uvcvideo.ko` | 自行编译的 UVC 驱动模块，vermagic `2.6.35.7-Concenwit preempt mod_unload ARMv7` |
+| `bin/uvc/uvc2fb` | 摄像头→帧缓冲显示程序（ARM 静态） |
 | `bin/android/zImage_android_fix.bin` | 由配套资源 `image/android_system/zImage.bin` 打补丁生成（清零多媒体预留表 + 内建 console 改 `ttySAC0`） |
 | `src/kernel/kernel_2.6.35.7_CW210.tar.bz2` | 培训资料 `porting/kernel.tar.bz2` |
 | `src/uboot/u-boot_CW210_1.3.4.tar.gz` | 培训资料 `porting/env/u-boot_CW210_1.3.4.tar.gz` |
@@ -268,3 +273,32 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
   sudo apt-get install -y libc6:i386 libstdc++6:i386
   ```
 - 用现代环境编译 Linux 2.6.35 还需额外处理，详见 [docs/03_CW210_Android尝试与Linux恢复_完整记录.md](docs/03_CW210_Android尝试与Linux恢复_完整记录.md) 第七节
+
+---
+
+## 十、USB 摄像头实时显示（2026-11 新增）
+
+板子系统现在可以做到：**插上 UVC 摄像头，开机自动在 LCD 上显示实时画面，无需任何手工操作。**
+
+| 项目 | 结果 |
+|---|---|
+| 摄像头 | `USB2.0 PC CAMERA`，`1908:2310`，UVC 1.00 |
+| 原内核 | **没有** `CONFIG_USB_VIDEO_CLASS`，插上只有 USB 枚举，没有 `/dev/videoN` |
+| 解决 | 自编 `uvcvideo.ko` + 重做 cramfs 加入 `insmod` 与启动脚本 |
+| 采集/输出 | 640×480 YUYV → 800×480 XRGB8888（32bpp） |
+| 实测帧率 | **28~29 fps**，连续 209 秒零 URB 报错 |
+| 自启动 | 冷启动全自动；守护循环负责断流自愈 |
+
+两个必须知道的坑：
+
+1. **只改 `CONFIG_USB_VIDEO_CLASS=m` 会被 oldconfig 删掉** —— 必须先打开 `V4L_USB_DRIVERS` 这个总开关，UVC 的 Kconfig 才会被 source 进来。
+2. **交叉工具链放在中文路径下会导致 `cc1` 找不到**（`execvp: No such file or directory`），需复制到纯 ASCII 路径。
+
+重要限制：
+
+> **不要用 `reboot` 或 u-boot 的 `boot` 热重启。** 摄像头供电不断时，驱动重新绑定后会报
+> `Failed to resubmit video URB (-27)` / `Failed to set UVC probe control : -110`，画面不再输出。
+> **拔掉 DC 电源等 10 秒再上电即可恢复。**
+
+完整过程（含 cramfs 解包/打包、u-boot 烧录参数、回滚方法）见
+[docs/05_USB摄像头实时显示与开机自启动.md](docs/05_USB摄像头实时显示与开机自启动.md)。
