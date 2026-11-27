@@ -300,6 +300,11 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 > `Failed to resubmit video URB (-27)` / `Failed to set UVC probe control : -110`，画面不再输出。
 > **拔掉 DC 电源等 10 秒再上电即可恢复。**
 
+另外，当前 `bootargs` 已加入 **`consoleblank=0`**：否则内核会在 10 分钟后关闭 LCD
+（程序用 mmap 写 `/dev/fb0` 不算控制台活动，不会重置息屏定时器）。
+注意 u-boot 1.3.4 的**命令行缓冲区会把长 setenv 截断**，需用短变量分段拼接，
+详见文档 7.4 节。
+
 完整过程（含 cramfs 解包/打包、u-boot 烧录参数、回滚方法）见
 [docs/05_USB摄像头实时显示与开机自启动.md](docs/05_USB摄像头实时显示与开机自启动.md)。
 

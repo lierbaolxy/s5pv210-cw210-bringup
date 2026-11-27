@@ -269,6 +269,70 @@ uvcvideo: Failed to set UVC probe control : -110 (exp. 26).
 - 退出后画面停在最后一帧
 - 只支持 **YUYV** 格式；若换 MJPEG-only 的摄像头，需要额外的 JPEG 解码
 
+### 7.4 屏幕约 10 分钟后自动熄灭（已解决）
+
+**现象**：LCD 变黑，但摄像头其实一直在出图。
+
+**原因**：内核的**控制台自动息屏**（console blank），默认 600 秒。
+`uvc2fb` 是通过 mmap 直接写 `/dev/fb0`，**不算作控制台活动**，不会重置这个定时器，
+所以即使画面一直在刷新，到点照样息屏。
+
+**判断方法**：
+
+```text
+# 1. 息屏时 framebuffer 里的数据仍在变化 —— 证明只是显示被关
+cat /dev/fb0 > /tmp/a.raw; sleep 2; cat /dev/fb0 > /tmp/b.raw
+cmp -l /tmp/a.raw /tmp/b.raw | wc -l      # 输出几十万，说明仍在出图
+
+# 2. 手动点亮
+echo 0 > /sys/class/graphics/fb0/blank
+```
+
+对应内核日志：
+
+```text
+s3cfb s3cfb: change blank mode
+s3cfb s3cfb: [fb0] win map off      <- 息屏
+s3cfb s3cfb: [fb0] turn on          <- 执行 echo 0 之后
+```
+
+> `/sys/class/graphics/fb0/blank` 在这个驱动上是**只写不读**的，`cat` 没有输出属正常。
+
+**永久修复**：在 u-boot 的 `bootargs` 里加 `consoleblank=0`。
+只改环境变量，**不动内核、不烧 rootfs**：
+
+```text
+setenv bootargs root=/dev/mtdblock2 rootfstype=cramfs init=/linuxrc console=ttySAC0,115200 logo.nologo ip=192.168.1.6::192.168.1.1:255.255.255.0::eth0:off consoleblank=0 mtdparts=s5pv210-nand:2m(bootloader),5m(kernel),-(rootfs)
+saveenv
+```
+
+⚠️ **实测坑：整行 setenv 会被 u-boot 命令行缓冲区截断**。
+直接贴上面那条命令时，写到 `5m(ker` 就断了（`printenv bootargs` 可看到残缺值）。
+此时必须用短变量分段拼接再展开：
+
+```text
+setenv bl1 root=/dev/mtdblock2 rootfstype=cramfs init=/linuxrc console=ttySAC0,115200 logo.nologo
+setenv bl2 ip=192.168.1.6::192.168.1.1:255.255.255.0::eth0:off consoleblank=0
+setenv bl3 mtdparts=s5pv210-nand:2m(bootloader),5m(kernel),-(rootfs)
+setenv bootargs ${bl1} ${bl2} ${bl3}
+setenv bl1
+setenv bl2
+setenv bl3
+saveenv
+```
+
+**验证**：
+
+```text
+cat /proc/cmdline        # 应包含 consoleblank=0
+```
+
+实测：冷启动后 42 秒检查，`consoleblank=0` 已生效，`uvc2fb` 正常运行、URB 报错 0 次、
+两帧间隔 2 秒有 854,133 字节差异。
+
+> 备选方案（未采用）：在 `uvc2fb` 里每 60 秒执行一次
+> `ioctl(fb, FBIOBLANK, FB_BLANK_UNBLANK)`。效果更彻底，但需要重做并重烧 cramfs。
+
 ---
 
 ## 八、回滚
