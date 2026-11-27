@@ -300,3 +300,33 @@ md5 `36757c531463d8d9d40ef05fba24cffe`），与本次改动前从板上 dump 出
 | `bin/rootfs/rootfs_splash.cramfs` | 改动前镜像（保留 Coca-Cola 开机画面，回滚用） |
 | `bin/rootfs/rootfs.cramfs` | 达内原始镜像 |
 | `docs/uvc_lcd_screenshot.png` | LCD 实际画面截图 |
+
+---
+
+## 十、提交记录
+
+| 提交 | 时间 | 说明 |
+|---|---|---|
+| `2d40538` | 2026-11-27 | `feat: USB 摄像头实时显示到 LCD 并开机自启` |
+
+- 分支：`main`
+- 远端：`git@github.com:lierbaolxy/s5pv210-cw210-bringup.git`
+- 本次提交共 **7 个文件、+637 行**：
+
+```
+README.md                                    +34
+bin/rootfs/rootfs_uvc.cramfs                 (3,940,352 字节)
+bin/uvc/uvc2fb                               (660,141 字节)
+bin/uvc/uvcvideo.ko                          (70,747 字节)
+docs/05_USB摄像头实时显示与开机自启动.md     +302
+docs/uvc_lcd_screenshot.png                  (316,347 字节)
+src/uvc/uvc2fb.c                             +301
+```
+
+提交前的两点处理：
+
+1. 远端已有 3 个本机没有的提交（`04a0785` Coca-Cola 开机画面、
+   `bfa2294` / `7259d88` 接线文档），先 `git pull --rebase` 合入，未产生冲突。
+2. 本次从板子上 dump 的「改动前镜像」与远端 `bin/rootfs/rootfs_splash.cramfs`
+   **md5 完全一致**（`36757c531463d8d9d40ef05fba24cffe`），因此未重复入库，
+   回滚时直接使用 `rootfs_splash.cramfs`。
