@@ -18,6 +18,7 @@
 #include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <linux/videodev2.h>
 #include <linux/fb.h>
 
@@ -51,6 +52,160 @@ static inline int clip(int v)
     return v < 0 ? 0 : (v > 255 ? 255 : v);
 }
 
+/* ---------------- 5x7 点阵字体（只覆盖水印用到的字符） ---------------- */
+struct glyph {
+    char c;
+    unsigned char rows[7];
+};
+
+static const struct glyph g_font[] = {
+    {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}},
+    {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'2', {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}},
+    {'3', {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E}},
+    {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}},
+    {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
+    {'6', {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}},
+    {'7', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
+    {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}},
+    {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}},
+    {'.', {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+    {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+    {'=', {0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00}},
+    {'-', {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}},
+    {' ', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
+};
+
+static const struct glyph *find_glyph(char c)
+{
+    unsigned int i;
+    for (i = 0; i < sizeof(g_font) / sizeof(g_font[0]); i++)
+        if (g_font[i].c == c) return &g_font[i];
+    return NULL;
+}
+
+static void fill_rect(int x, int y, int w, int h, unsigned int color)
+{
+    int dy, dx;
+    for (dy = 0; dy < h; dy++) {
+        unsigned char *row;
+        if (y + dy < 0 || y + dy >= fb_h) continue;
+        row = fb_mem + (size_t)(y + dy) * fb_line;
+        for (dx = 0; dx < w; dx++) {
+            if (x + dx < 0 || x + dx >= fb_w) continue;
+            if (fb_bpp == 32) ((unsigned int *)row)[x + dx] = color;
+            else ((unsigned short *)row)[x + dx] = (unsigned short)color;
+        }
+    }
+}
+
+static int draw_char(int x, int y, char c, int scale, unsigned int fg)
+{
+    const struct glyph *g = find_glyph(c);
+    int r, col, dx, dy;
+
+    if (!g) return 5 * scale;
+
+    for (r = 0; r < 7; r++) {
+        for (col = 0; col < 5; col++) {
+            if (!(g->rows[r] & (1 << (4 - col)))) continue;
+            for (dy = 0; dy < scale; dy++) {
+                unsigned char *row;
+                int py = y + r * scale + dy;
+                if (py < 0 || py >= fb_h) continue;
+                row = fb_mem + (size_t)py * fb_line;
+                for (dx = 0; dx < scale; dx++) {
+                    int px = x + col * scale + dx;
+                    if (px < 0 || px >= fb_w) continue;
+                    if (fb_bpp == 32) ((unsigned int *)row)[px] = fg;
+                    else ((unsigned short *)row)[px] = (unsigned short)fg;
+                }
+            }
+        }
+    }
+    return 5 * scale;
+}
+
+static void draw_text(int x, int y, const char *s, int scale, unsigned int fg)
+{
+    while (*s) {
+        x += draw_char(x, y, *s, scale, fg) + scale;
+        s++;
+    }
+}
+
+/* ---------------- 温度（DS18B20）后台读取 ---------------- */
+static float *g_temp = NULL;
+static pid_t g_temp_pid = -1;
+
+static void temp_start(void)
+{
+    g_temp = mmap(NULL, sizeof(float), PROT_READ | PROT_WRITE,
+                  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (g_temp == MAP_FAILED) { g_temp = NULL; return; }
+    *g_temp = -999.0f;
+
+    g_temp_pid = fork();
+    if (g_temp_pid == 0) {
+        int fd;
+        /* 子进程必须恢复默认信号处理，否则会被父进程的 SIGTERM 处理器“吞掉”而杀不死 */
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGHUP, SIG_DFL);
+        /* 关闭从父进程继承的 video / fb / 日志句柄，否则会一直占着设备 */
+        for (fd = 3; fd < 64; fd++) close(fd);
+
+        fd = open("/dev/ds18b20", O_RDONLY);
+        if (fd < 0) _exit(0);           /* 没有驱动就直接退出，父进程不显示温度 */
+        for (;;) {
+            int v = 0;
+            if (read(fd, &v, sizeof(v)) == (ssize_t)sizeof(v))
+                *g_temp = v / 10000.0f; /* 驱动给的是 0.0001℃，转成 ℃ */
+            sleep(1);
+        }
+    }
+}
+
+static void temp_stop(void)
+{
+    if (g_temp_pid > 0) {
+        kill(g_temp_pid, SIGTERM);
+        waitpid(g_temp_pid, NULL, 0);
+        g_temp_pid = -1;
+    }
+    if (g_temp) { munmap(g_temp, sizeof(float)); g_temp = NULL; }
+}
+
+/* 水印固定占用一块区域：像素转换时跳过它，否则每帧都会被画面覆盖 */
+#define WM_X      8
+#define WM_Y      8
+#define WM_PAD    6
+#define WM_SCALE  5
+#define WM_MAXCH  8                                   /* 最长为 "T=-12.3C" */
+#define WM_W      (WM_MAXCH * (5 * WM_SCALE + WM_SCALE) - WM_SCALE + WM_PAD * 2)
+#define WM_H      (7 * WM_SCALE + WM_PAD * 2)
+
+static void draw_watermark(void)
+{
+    char buf[24];
+    int v, len;
+
+    /* 先整块涂黑，保证字数变化时不残留上一帧的笔画 */
+    fill_rect(WM_X, WM_Y, WM_W, WM_H, pack(0, 0, 0));
+
+    if (!g_temp || *g_temp < -100.0f) return;
+
+    v = (int)(*g_temp * 10.0f + 0.5f);  /* 保留 1 位小数 */
+    if (v < 0) snprintf(buf, sizeof(buf), "T=-%d.%dC", (-v) / 10, (-v) % 10);
+    else       snprintf(buf, sizeof(buf), "T=%d.%dC", v / 10, v % 10);
+
+    len = (int)strlen(buf);
+    if (len > WM_MAXCH) len = WM_MAXCH;
+
+    draw_text(WM_X + WM_PAD, WM_Y + WM_PAD, buf, WM_SCALE, pack(255, 255, 255));
+}
+
 static int xioctl(int fd, int req, void *arg)
 {
     int r;
@@ -63,6 +218,21 @@ static double now_ms(void)
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+}
+
+/* 解绑 framebuffer 控制台：否则内核一打印日志，fbcon 重绘就会盖掉画面叠加内容 */
+static void fbcon_off(void)
+{
+    int i, fd;
+    char p[64];
+
+    for (i = 0; i < 4; i++) {
+        snprintf(p, sizeof(p), "/sys/class/vtconsole/vtcon%d/bind", i);
+        fd = open(p, O_WRONLY);
+        if (fd < 0) continue;
+        write(fd, "0", 1);
+        close(fd);
+    }
 }
 
 static int fb_init(void)
@@ -186,7 +356,9 @@ int main(int argc, char **argv)
         if (bufs[i].start == MAP_FAILED) { perror("mmap buf"); return 1; }
     }
 
+    fbcon_off();    /* 关掉 framebuffer 控制台，防止内核日志刷掉画面 */
     if (fb_init() < 0) return 1;
+    temp_start();   /* 启动温度后台读取，读不到就自动不显示 */
 
     /* 预计算横向映射表，避免每像素除法 */
     sxmap = malloc(sizeof(int) * fb_w);
@@ -253,14 +425,22 @@ int main(int argc, char **argv)
 
             for (x = 0; x < fb_w; x++) {
                 int off = sxmap[x];
-                int yy = srow[off];
-                int uu = srow[off + 1];
-                int vv = srow[off + 3];
-                int c = yy - 16, d = uu - 128, e = vv - 128;
-                int rr = clip((298 * c + 409 * e + 128) >> 8);
-                int gg = clip((298 * c - 100 * d - 208 * e + 128) >> 8);
-                int bb = clip((298 * c + 516 * d + 128) >> 8);
-                unsigned int px = pack(rr, gg, bb);
+                int yy, uu, vv, c, d, e, rr, gg, bb;
+                unsigned int px;
+
+                /* 水印区域不参与转换，否则每帧都会被画面覆盖掉 */
+                if (x >= WM_X && x < WM_X + WM_W &&
+                    y >= (unsigned int)WM_Y && y < (unsigned int)(WM_Y + WM_H))
+                    continue;
+
+                yy = srow[off];
+                uu = srow[off + 1];
+                vv = srow[off + 3];
+                c = yy - 16; d = uu - 128; e = vv - 128;
+                rr = clip((298 * c + 409 * e + 128) >> 8);
+                gg = clip((298 * c - 100 * d - 208 * e + 128) >> 8);
+                bb = clip((298 * c + 516 * d + 128) >> 8);
+                px = pack(rr, gg, bb);
 
                 if (fb_bpp == 32)
                     ((unsigned int *)drow)[x] = px;
@@ -268,6 +448,9 @@ int main(int argc, char **argv)
                     ((unsigned short *)drow)[x] = (unsigned short)px;
             }
         }
+
+        /* 在画面上叠加温度水印 */
+        draw_watermark();
 
         if (xioctl(vfd, VIDIOC_QBUF, &buf) < 0) { perror("VIDIOC_QBUF"); break; }
 
@@ -294,6 +477,7 @@ int main(int argc, char **argv)
     for (i = 0; i < (int)req.count; i++)
         if (bufs[i].start != MAP_FAILED) munmap(bufs[i].start, bufs[i].length);
     free(sxmap);
+    temp_stop();
     close(vfd);
     printf("exit, total frames=%u  avg=%.1f fps  worst=%.1f ms\n",
            frames, frames / ((now_ms() - t_start) / 1000.0), worst);

@@ -237,6 +237,7 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 | [03_CW210_Android尝试与Linux恢复_完整记录.md](docs/03_CW210_Android尝试与Linux恢复_完整记录.md) | Android 2.3 的尝试全过程、根因分析、以及 Linux 系统的恢复方法 |
 | [04_接线与拨码配置.md](docs/04_接线与拨码配置.md) | **串口/网口/USB 连线、SW3/SW4 拨码、启动方式、接线速查表与日志判读** |
 | [05_USB摄像头实时显示与开机自启动.md](docs/05_USB摄像头实时显示与开机自启动.md) | **给内核补 UVC 驱动、cramfs 加自启动、实测 28~29fps 的完整过程与坑** |
+| [06_DS18B20温度水印_完整记录.md](docs/06_DS18B20温度水印_完整记录.md) | **DS18B20 驱动编译、温度水印叠加、三个“水印看不见”的坑、cramfs 烧录** |
 | [hardware/](docs/hardware/README.md) | **硬件原理图与手册**：底板图、核心板图（TARENA / LHGZ 两版）、S5PV210 SoC 用户手册、iROM 应用笔记、NAND 数据手册 |
 
 ---
@@ -249,10 +250,12 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 | `bin/bootloader/x210_usb.bin` | 配套资源 `image/android_system/x210_usb.bin`（BL1，USB 下载用） |
 | `bin/kernel/zImage` | 配套资源 `image/normal_system/zImage`（Linux 2.6.35.7-Concenwit #5） |
 | `bin/rootfs/rootfs.cramfs` | 配套资源 `image/normal_system/rootfs.cramfs` |
-| `bin/rootfs/rootfs_uvc.cramfs` | **当前板内运行**：在原 cramfs 基础上加入 `uvcvideo.ko`、`uvc2fb` 与 rcS 自启动（3,940,352 字节） |
+| `bin/rootfs/rootfs_wm.cramfs` | **当前板内运行**：摄像头 + DS18B20 温度水印 + 两个驱动 + rcS 自启动（3,944,448 字节） |
+| `bin/rootfs/rootfs_uvc.cramfs` | 只有摄像头、无水印（3,940,352 字节） |
 | `bin/rootfs/rootfs_splash.cramfs` | 加摄像头功能之前的镜像（3,555,328 字节），回滚用 |
 | `bin/uvc/uvcvideo.ko` | 自行编译的 UVC 驱动模块，vermagic `2.6.35.7-Concenwit preempt mod_unload ARMv7` |
-| `bin/uvc/uvc2fb` | 摄像头→帧缓冲显示程序（ARM 静态） |
+| `bin/uvc/ds18b20_drv.ko` | DS18B20 温度驱动模块（已改 `msleep` + 静音 printk），vermagic 同上 |
+| `bin/uvc/uvc2fb` | 摄像头→帧缓冲显示程序（ARM 静态，含温度水印） |
 | `bin/android/zImage_android_fix.bin` | 由配套资源 `image/android_system/zImage.bin` 打补丁生成（清零多媒体预留表 + 内建 console 改 `ttySAC0`） |
 | `src/kernel/kernel_2.6.35.7_CW210.tar.bz2` | 培训资料 `porting/kernel.tar.bz2` |
 | `src/uboot/u-boot_CW210_1.3.4.tar.gz` | 培训资料 `porting/env/u-boot_CW210_1.3.4.tar.gz` |
@@ -309,3 +312,35 @@ Android 根文件系统已修正为标准 yaffs2 并通过 788 个对象全量�
 [docs/05_USB摄像头实时显示与开机自启动.md](docs/05_USB摄像头实时显示与开机自启动.md)。
 
 > 归档提交：`2d40538`（2026-11-27）`feat: USB 摄像头实时显示到 LCD 并开机自启`，共 7 个文件 / +637 行。
+
+---
+
+## 十一、DS18B20 温度水印（2026-11 新增）
+
+在第十章的摄像头画面上，**左上角实时叠加板载 DS18B20 的实测温度**，同样开机全自动。
+
+| 项目 | 结果 |
+|---|---|
+| 传感器 | 原理图 U20 DS18B20，DQ → **XEINT8 = GPH1_0**，R20 4.7K 上拉 3V3_IO |
+| 驱动 | 自编 `ds18b20_drv.ko`（3,814 字节），misc 设备 `/dev/ds18b20` |
+| 数据格式 | `read()` 返回 4 字节 int，单位 0.0001℃（`285625` = 28.5625℃） |
+| 水印样式 | 白字黑底 `T=28.6C`，5×7 点阵 ×5 放大，矩形 247×47，位于 (8,8) |
+| 实测 | 冷启动后识别为 **T=28.6C**，与 `dd if=/dev/ds18b20` 一致 |
+| 自启动 | rcS 先 `insmod` 两个模块，再由守护循环拉起 `uvc2fb` |
+
+驱动相对原版改了两处：
+
+1. `ds18b20_reset()` 去掉成功时的 `printk` —— 每秒打印会让 fbcon 重绘并**盖掉水印**。
+2. `mdelay(750)` → `msleep(750)` —— `read()` 在进程上下文，忙等会白烧 43% CPU。
+
+水印能稳定显示的关键：**YUYV→RGB 转换时直接跳过水印矩形**。
+如果只在帧末绘制，下一帧从 y=0 整屏重写，水印只可见约 1ms。
+
+另外温度读取放在 `fork` 出的子进程里（`read()` 每次阻塞 750ms），
+子进程必须把 `SIGTERM/SIGINT/SIGHUP` 恢复为 `SIG_DFL` 并关掉继承的 3~63 号 fd，
+否则 `killall` 杀不掉、`rmmod` 报 device busy。
+
+完整过程（引脚核对、两处修改、点阵字体、三个坑、cramfs 重打包与烧录、回滚）见
+[docs/06_DS18B20温度水印_完整记录.md](docs/06_DS18B20温度水印_完整记录.md)。
+
+> 效果截图：[docs/uvc_temp_watermark.png](docs/uvc_temp_watermark.png)（800×480 帧缓冲原始导出）
